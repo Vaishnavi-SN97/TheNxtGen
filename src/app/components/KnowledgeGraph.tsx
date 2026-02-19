@@ -13,9 +13,11 @@ interface KnowledgeNode {
 
 interface KnowledgeGraphProps {
   nodes: KnowledgeNode[];
+  onNodeClick: (node: KnowledgeNode) => void;
+  practicingNodeId?: string;
 }
 
-export function KnowledgeGraph({ nodes }: KnowledgeGraphProps) {
+export function KnowledgeGraph({ nodes, onNodeClick, practicingNodeId }: KnowledgeGraphProps) {
   return (
     <PixelPanel variant="success" className="space-y-4">
       <h2 
@@ -25,9 +27,7 @@ export function KnowledgeGraph({ nodes }: KnowledgeGraphProps) {
         SKILL TREE
       </h2>
 
-      {/* Graph Canvas */}
       <div className="relative w-full h-96 bg-gradient-to-br from-green-50 to-emerald-100 border-4 border-green-400 rounded-lg overflow-hidden">
-        {/* Draw connections */}
         <svg className="absolute inset-0 w-full h-full pointer-events-none">
           {nodes.map(node => 
             node.dependencies.map(depId => {
@@ -55,22 +55,21 @@ export function KnowledgeGraph({ nodes }: KnowledgeGraphProps) {
           )}
         </svg>
 
-        {/* Draw nodes */}
         {nodes.map(node => (
           <motion.div
             key={node.id}
             initial={{ scale: 0, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
             transition={{ delay: 0.1 }}
-            className="absolute"
+            className="absolute cursor-pointer"
             style={{
               left: `${node.x}%`,
               top: `${node.y}%`,
               transform: 'translate(-50%, -50%)',
             }}
+            onClick={() => onNodeClick(node)}
           >
             <div className="relative">
-              {/* Glow effect for unlocked nodes */}
               {node.unlocked && (
                 <motion.div
                   animate={{ 
@@ -85,8 +84,22 @@ export function KnowledgeGraph({ nodes }: KnowledgeGraphProps) {
                   className="absolute inset-0 rounded-full bg-green-400 blur-xl"
                 />
               )}
+              
+              {practicingNodeId === node.id && (
+                  <motion.div
+                    animate={{
+                        scale: [1, 1.5, 1],
+                        opacity: [0.7, 1, 0.7]
+                    }}
+                    transition={{
+                        duration: 1.5,
+                        repeat: Infinity,
+                        ease: 'easeInOut'
+                    }}
+                    className="absolute inset-0 rounded-full bg-blue-400 blur-lg"
+                   />
+              )}
 
-              {/* Node circle */}
               <div 
                 className={`
                   relative w-16 h-16 rounded-full border-4 flex items-center justify-center
@@ -95,7 +108,6 @@ export function KnowledgeGraph({ nodes }: KnowledgeGraphProps) {
                   shadow-lg
                 `}
               >
-                {/* Mastery indicator */}
                 {node.unlocked && (
                   <div className="absolute inset-0 rounded-full overflow-hidden">
                     <div 
@@ -111,7 +123,6 @@ export function KnowledgeGraph({ nodes }: KnowledgeGraphProps) {
                   </div>
                 )}
 
-                {/* Lock icon or checkmark */}
                 <div className="relative z-10">
                   {node.unlocked ? (
                     node.mastery >= 100 ? (
@@ -130,7 +141,6 @@ export function KnowledgeGraph({ nodes }: KnowledgeGraphProps) {
                 </div>
               </div>
 
-              {/* Label */}
               <div className="absolute top-full mt-2 left-1/2 transform -translate-x-1/2 whitespace-nowrap">
                 <p 
                   className={`text-xs px-2 py-1 rounded border-2
@@ -146,7 +156,6 @@ export function KnowledgeGraph({ nodes }: KnowledgeGraphProps) {
         ))}
       </div>
 
-      {/* Legend */}
       <div className="grid grid-cols-3 gap-2 text-center">
         <div>
           <div className="w-6 h-6 rounded-full bg-gray-400 border-2 border-gray-600 mx-auto mb-1" />

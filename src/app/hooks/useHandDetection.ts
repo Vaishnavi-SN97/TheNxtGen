@@ -1,5 +1,5 @@
 import { useRef, useState, useCallback, useEffect } from 'react';
-import { Hands, Results } from '@mediapipe/hands';
+import { Hands, Results, LandmarkList, Handedness } from '@mediapipe/hands';
 
 interface Point {
   x: number;
@@ -7,11 +7,11 @@ interface Point {
 }
 
 interface HandDetectionResult {
-  indexTip: Point | null;
-  isDrawingGesture: boolean;
   allLandmarks: any[];
   fingerCount: number;
   totalFingers: number;
+  isDrawingGesture: boolean;
+  indexTip: Point | null;
 }
 
 interface UseHandDetectionReturn {
@@ -19,6 +19,39 @@ interface UseHandDetectionReturn {
   error: string | null;
   startCamera: (video: HTMLVideoElement, canvas: HTMLCanvasElement) => Promise<void>;
   stopCamera: () => void;
+}
+
+const countFingers = (handLandmarks: LandmarkList, handedness: Handedness): number => {
+    let fingers = 0;
+
+    const tips = [8, 12, 16, 20];
+    const pips = [6, 10, 14, 18];
+
+    for (let i = 0; i < tips.length; i++) {
+        if (handLandmarks[tips[i]].y < handLandmarks[pips[i]].y) {
+            fingers++;
+        }
+    }
+
+    const thumbTip = handLandmarks[4];
+    const thumbIp = handLandmarks[3];
+    if (handedness && handedness.length > 0) {
+        if (handedness[0].categoryName === "Right") {
+            if (thumbTip.x < thumbIp.x) {
+                fingers++;
+            }
+        } else { // Left
+            if (thumbTip.x > thumbIp.x) {
+                fingers++;
+            }
+        }
+    } else {
+        if (Math.abs(handLandmarks[4].x - handLandmarks[3].x) > 0.04) {
+            fingers++;
+        }
+    }
+
+    return fingers;
 }
 
 export function useHandDetection(
@@ -32,25 +65,21 @@ export function useHandDetection(
   const [error, setError] = useState<string | null>(null);
 
   const stopCamera = useCallback(() => {
-    // Stop animation frame
     if (animationFrameRef.current) {
       cancelAnimationFrame(animationFrameRef.current);
       animationFrameRef.current = null;
     }
 
-    // Stop camera stream
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => track.stop());
       streamRef.current = null;
     }
 
-    // Close hands
     if (handsRef.current) {
       handsRef.current.close();
       handsRef.current = null;
     }
 
-    // Clear video
     if (currentVideoRef.current) {
       currentVideoRef.current.srcObject = null;
       currentVideoRef.current = null;
@@ -69,44 +98,6 @@ export function useHandDetection(
       setError(null);
       currentVideoRef.current = videoElement;
 
-      // Check if running in an iframe
-      const isInIframe = window.self !== window.top;
-      
-      // Check if getUserMedia is supported
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        if (isInIframe) {
-          setError('Camera blocked in iframe. Click "Open in New Tab" below to use camera features.');
-        } else {
-          setError('Camera API not supported in this browser');
-        }
-        setIsInitialized(false);
-        return;
-      }
-
-      // Check permissions API if available
-      if (navigator.permissions && navigator.permissions.query) {
-        try {
-          const permissionStatus = await navigator.permissions.query({ name: 'camera' as PermissionName });
-          console.log('Camera permission status:', permissionStatus.state);
-          
-          if (permissionStatus.state === 'denied') {
-            if (isInIframe) {
-              setError('Camera blocked in iframe. Click "Open in New Tab" to use camera features.');
-            } else {
-              setError('Camera permission denied. Please allow camera access in browser settings.');
-            }
-            setIsInitialized(false);
-            return;
-          }
-        } catch (e) {
-          console.log('Permissions API not fully supported, continuing...');
-        }
-      }
-
-      console.log('Requesting camera access...');
-      console.log('Running in iframe:', isInIframe);
-
-      // Request camera permission and get stream with better constraints
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
           width: { ideal: 1280 },
@@ -116,12 +107,9 @@ export function useHandDetection(
         audio: false
       });
 
-      console.log('Camera access granted!');
-
       streamRef.current = stream;
       videoElement.srcObject = stream;
 
-      // Wait for video to be ready
       await new Promise<void>((resolve) => {
         videoElement.onloadedmetadata = () => {
           videoElement.play();
@@ -129,11 +117,8 @@ export function useHandDetection(
         };
       });
 
-      // Initialize MediaPipe Hands
       const hands = new Hands({
-        locateFile: (file) => {
-          return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
-        },
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
       });
 
       hands.setOptions({
@@ -146,82 +131,49 @@ export function useHandDetection(
       hands.onResults((results: Results) => {
         let totalFingers = 0;
         const allHandLandmarks: any[] = [];
+        let isDrawingGesture = false;
+        let indexTip: Point | null = null;
 
         if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-          // Count fingers across all detected hands
-          results.multiHandLandmarks.forEach((landmarks) => {
+          results.multiHandLandmarks.forEach((landmarks, index) => {
             allHandLandmarks.push(landmarks);
-            
-            let fingers = 0;
-            
-            // Check 4 fingers (index, middle, ring, pinky)
-            const tips = [8, 12, 16, 20];
-            const pips = [6, 10, 14, 18];
-            
-            for (let i = 0; i < tips.length; i++) {
-              if (landmarks[tips[i]].y < landmarks[pips[i]].y) {
-                fingers++;
-              }
+            const handedness = results.multiHandedness[index];
+            totalFingers += countFingers(landmarks, handedness);
+
+            const indexFingerTip = landmarks[8];
+            const middleFingerTip = landmarks[12];
+            const ringFingerTip = landmarks[16];
+            const pinkyFingerTip = landmarks[20];
+            const indexMcp = landmarks[5];
+
+            const indexRaised = indexFingerTip.y < indexMcp.y - 0.05;
+            const middleFolded = middleFingerTip.y > indexMcp.y;
+            const ringFolded = ringFingerTip.y > indexMcp.y;
+            const pinkyFolded = pinkyFingerTip.y > indexMcp.y;
+
+            if (indexRaised && middleFolded && ringFolded && pinkyFolded) {
+                isDrawingGesture = true;
+                indexTip = { x: indexFingerTip.x, y: indexFingerTip.y };
             }
-            
-            // Check thumb (horizontal comparison)
-            if (Math.abs(landmarks[4].x - landmarks[3].x) > 0.04) {
-              fingers++;
-            }
-            
-            totalFingers += fingers;
           });
         }
 
-        const handDetectionResult: HandDetectionResult = {
-          indexTip: null,
-          isDrawingGesture: false,
-          allLandmarks: allHandLandmarks.length > 0 ? allHandLandmarks[0] : [],
+        onResults({
+          allLandmarks: allHandLandmarks.length > 0 ? allHandLandmarks : [],
           fingerCount: totalFingers,
           totalFingers: totalFingers,
-        };
-
-        // Drawing gesture detection (first hand only)
-        if (allHandLandmarks.length > 0) {
-          const landmarks = allHandLandmarks[0];
-          const indexTip = landmarks[8];
-          const indexMcp = landmarks[5];
-          const middleTip = landmarks[12];
-          const ringTip = landmarks[16];
-          const pinkyTip = landmarks[20];
-
-          const indexRaised = indexTip.y < indexMcp.y - 0.05;
-          const middleFolded = middleTip.y > indexMcp.y;
-          const ringFolded = ringTip.y > indexMcp.y;
-          const pinkyFolded = pinkyTip.y > indexMcp.y;
-
-          handDetectionResult.isDrawingGesture = 
-            indexRaised && middleFolded && ringFolded && pinkyFolded;
-
-          if (handDetectionResult.isDrawingGesture) {
-            handDetectionResult.indexTip = {
-              x: indexTip.x,
-              y: indexTip.y,
-            };
-          }
-        }
-
-        onResults(handDetectionResult);
+          isDrawingGesture,
+          indexTip
+        });
       });
 
       handsRef.current = hands;
 
-      // Process video frames
       const processFrame = async () => {
-        const video = currentVideoRef.current;
-        const handsInstance = handsRef.current;
-        
-        if (!video || !handsInstance) return;
-
-        if (video.readyState >= 2) {
-          await handsInstance.send({ image: video });
+        if (!currentVideoRef.current || !handsRef.current) return;
+        if (currentVideoRef.current.readyState >= 2) {
+          await handsRef.current.send({ image: currentVideoRef.current });
         }
-
         animationFrameRef.current = requestAnimationFrame(processFrame);
       };
 
@@ -230,21 +182,12 @@ export function useHandDetection(
 
     } catch (err: any) {
       console.error('Error initializing hand tracking:', err);
-      if (err.name === 'NotAllowedError') {
-        setError('Camera permission denied. Please allow camera access and try again.');
-      } else if (err.name === 'NotFoundError') {
-        setError('No camera found. Please connect a camera.');
-      } else if (err.name === 'NotReadableError') {
-        setError('Camera is already in use by another application.');
-      } else {
-        setError('Failed to access camera: ' + err.message);
-      }
+      setError('Failed to access camera: ' + err.message);
       setIsInitialized(false);
       stopCamera();
     }
   }, [onResults, stopCamera]);
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
       stopCamera();

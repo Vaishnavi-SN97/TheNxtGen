@@ -107,13 +107,13 @@ export const useHandDetection = (videoRef: React.RefObject<HTMLVideoElement | nu
 
         let totalFingers = 0;
         let isHandDetected = false;
-        drawingPointsRef.current = [];
 
         if (results.multiHandLandmarks && results.multiHandedness && results.multiHandLandmarks.length > 0) {
           isHandDetected = true;
           results.multiHandLandmarks.forEach((landmarks, index) => {
+            // Draw hand connections and landmarks
             drawConnectors(ctx, landmarks, HAND_CONNECTIONS, { color: '#00FF00', lineWidth: 2 });
-            drawLandmarks(ctx, landmarks, { color: '#FF0000', lineWidth: 1 });
+            drawLandmarks(ctx, landmarks, { color: '#FF0000', lineWidth: 2 });
 
             // Safely get handedness with fallback
             const handedness = results.multiHandedness && results.multiHandedness[index] 
@@ -122,33 +122,51 @@ export const useHandDetection = (videoRef: React.RefObject<HTMLVideoElement | nu
             const fingers = countFingers(landmarks, handedness);
             totalFingers += fingers;
 
-        // Track drawing points for number/subtraction detection
+            // Track drawing points for number/subtraction detection using index finger (landmark 8)
             if (modeRef.current === 'number' || modeRef.current === 'subtraction') {
               const x = landmarks[8].x * canvas.width;
               const y = landmarks[8].y * canvas.height;
               drawingPointsRef.current.push({ x, y });
             }
           });
-        }
 
-        // Draw path in number/subtraction mode
-        if ((modeRef.current === 'number' || modeRef.current === 'subtraction') && drawingPointsRef.current.length > 1) {
-          const detectedNum = detectNumber(drawingPointsRef.current);
-          
-          // Draw outline
-          ctx.strokeStyle = '#0000FF';
-          ctx.lineWidth = 3;
-          ctx.beginPath();
-          ctx.moveTo(drawingPointsRef.current[0].x, drawingPointsRef.current[0].y);
-          for (let i = 1; i < drawingPointsRef.current.length; i++) {
-            ctx.lineTo(drawingPointsRef.current[i].x, drawingPointsRef.current[i].y);
-          }
-          ctx.stroke();
+          // Draw smooth path trace from the tracked points
+          if ((modeRef.current === 'number' || modeRef.current === 'subtraction') && drawingPointsRef.current.length > 0) {
+            ctx.strokeStyle = '#0000FF';
+            ctx.lineWidth = 4;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            ctx.globalAlpha = 0.7;
 
-          // Fill if number detected
-          if (detectedNum && drawingPointsRef.current.length > 20) {
-            ctx.fillStyle = 'rgba(0, 100, 255, 0.3)';
-            ctx.fill();
+            // Draw smooth curve through all points
+            if (drawingPointsRef.current.length > 1) {
+              ctx.beginPath();
+              ctx.moveTo(drawingPointsRef.current[0].x, drawingPointsRef.current[0].y);
+              
+              for (let i = 1; i < drawingPointsRef.current.length; i++) {
+                const current = drawingPointsRef.current[i];
+                const prev = drawingPointsRef.current[i - 1];
+                const mx = (current.x + prev.x) / 2;
+                const my = (current.y + prev.y) / 2;
+                ctx.quadraticCurveTo(prev.x, prev.y, mx, my);
+              }
+              ctx.stroke();
+            }
+
+            ctx.globalAlpha = 1;
+
+            // Detect number from drawing
+            const detectedNum = detectNumber(drawingPointsRef.current);
+            if (detectedNum && drawingPointsRef.current.length > 15) {
+              // Draw filled path for detected numbers
+              ctx.fillStyle = 'rgba(0, 150, 255, 0.2)';
+              ctx.beginPath();
+              ctx.moveTo(drawingPointsRef.current[0].x, drawingPointsRef.current[0].y);
+              for (let i = 1; i < drawingPointsRef.current.length; i++) {
+                ctx.lineTo(drawingPointsRef.current[i].x, drawingPointsRef.current[i].y);
+              }
+              ctx.fill();
+            }
           }
         }
 

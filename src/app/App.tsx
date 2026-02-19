@@ -1,24 +1,15 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Gamepad2, Volume2, VolumeX, Music } from 'lucide-react';
+import { Gamepad2, Volume2, VolumeX, Music, Brush, Hand } from 'lucide-react';
 import { DrawingCanvas } from './components/DrawingCanvas';
 import { MasteryPanel } from './components/MasteryPanel';
-import { CoursePanel } from './components/CoursePanel';
 import { KnowledgeGraph } from './components/KnowledgeGraph';
 import { VideoSection } from './components/VideoSection';
 import { PixelCharacter } from './components/PixelCharacter';
 import { useSounds } from './hooks/useSounds';
+import { RetroButton } from './components/RetroButton';
 
 // Types
-interface CourseLevel {
-  id: number;
-  name: string;
-  topic: string;
-  locked: boolean;
-  completed: boolean;
-  current: boolean;
-}
-
 interface KnowledgeNode {
   id: string;
   label: string;
@@ -30,7 +21,7 @@ interface KnowledgeNode {
 }
 
 interface VideoRecommendation {
-  id: string;
+  id:string;
   title: string;
   thumbnail: string;
   videoId: string;
@@ -38,6 +29,31 @@ interface VideoRecommendation {
 }
 
 type CharacterMood = 'happy' | 'neutral' | 'encouraging' | 'excited';
+type GameMode = 'count' | 'draw';
+
+const mathQuestions = [
+    { question: 'What is 1 + 1?', answer: 2 },
+    { question: 'What is 1 + 2?', answer: 3 },
+    { question: 'What is 2 + 1?', answer: 3 },
+    { question: 'What is 2 + 2?', answer: 4 },
+    { question: 'What is 2 + 3?', answer: 5 },
+    { question: 'What is 3 + 2?', answer: 5 },
+    { question: 'What is 3 + 1?', answer: 4 },
+    { question: 'What is 1 + 3?', answer: 4 },
+    { question: 'What is 4 + 1?', answer: 5 },
+    { question: 'What is 1 + 4?', answer: 5 },
+    { question: 'What is 2 - 1?', answer: 1 },
+    { question: 'What is 3 - 1?', answer: 2 },
+    { question: 'What is 3 - 2?', answer: 1 },
+    { question: 'What is 4 - 1?', answer: 3 },
+    { question: 'What is 4 - 2?', answer: 2 },
+    { question: 'What is 4 - 3?', answer: 1 },
+    { question: 'What is 5 - 1?', answer: 4 },
+    { question: 'What is 5 - 2?', answer: 3 },
+    { question: 'What is 5 - 3?', answer: 2 },
+    { question: 'What is 5 - 4?', answer: 1 },
+];
+const PRACTICE_THRESHOLD = 3;
 
 export default function App() {
   // Game State
@@ -46,12 +62,26 @@ export default function App() {
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [musicEnabled, setMusicEnabled] = useState(false);
   const [showLevelUp, setShowLevelUp] = useState(false);
-  const [lastCompletedLevel, setLastCompletedLevel] = useState<string | undefined>(undefined);
-  
-  // Sound System
+  const [targetNumber, setTargetNumber] = useState(() => {
+    const initialQuestion = mathQuestions[Math.floor(Math.random() * mathQuestions.length)];
+    return initialQuestion.answer;
+  });
+  const [mode, setMode] = useState<GameMode>('count');
+  const [masteryProgress, setMasteryProgress] = useState(0);
+
   const { playSound, startBackgroundMusic, stopBackgroundMusic } = useSounds();
-  
-  // Start/stop music when toggle changes
+
+  useEffect(() => {
+    const savedScore = localStorage.getItem('score');
+    if (savedScore) {
+      setScore(parseInt(savedScore, 10));
+    }
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem('score', score.toString());
+  }, [score]);
+
   useEffect(() => {
     if (musicEnabled) {
       startBackgroundMusic();
@@ -59,235 +89,158 @@ export default function App() {
       stopBackgroundMusic();
     }
   }, [musicEnabled, startBackgroundMusic, stopBackgroundMusic]);
-  
-  // Character State
+
   const [characterMood, setCharacterMood] = useState<CharacterMood>('neutral');
-  const [characterMessage, setCharacterMessage] = useState('Welcome! Let\'s learn together!');
+  const [characterMessage, setCharacterMessage] = useState('Welcome! Select a mode to start.');
+
+  const [currentPrompt, setCurrentPrompt] = useState(() => {
+    const initialQuestion = mathQuestions.find(q => q.answer === targetNumber) || mathQuestions[0];
+    return initialQuestion.question;
+  });
   
-  // Course State
-  const [courseLevels, setCourseLevels] = useState<CourseLevel[]>([
-    { id: 1, name: 'Counting', topic: 'Numbers 1-10', locked: false, completed: false, current: true },
-    { id: 2, name: 'Addition', topic: 'Basic Math', locked: true, completed: false, current: false },
-    { id: 3, name: 'Subtraction', topic: 'Basic Math', locked: true, completed: false, current: false },
-    { id: 4, name: 'Shapes', topic: 'Geometry', locked: true, completed: false, current: false },
-  ]);
-  
-  const [currentPrompt, setCurrentPrompt] = useState('Draw a Circle!');
-  const [masteryProgress, setMasteryProgress] = useState(30);
-  
-  // Knowledge Graph State
+  const [isPracticing, setIsPracticing] = useState(false);
+  const [practicingNodeId, setPracticingNodeId] = useState<string | null>('counting');
+  const [practiceProgress, setPracticeProgress] = useState(0);
+
   const [knowledgeNodes, setKnowledgeNodes] = useState<KnowledgeNode[]>([
-    { id: 'counting', label: 'Counting', mastery: 30, unlocked: true, x: 30, y: 20, dependencies: [] },
-    { id: 'numbers', label: 'Numbers', mastery: 20, unlocked: true, x: 50, y: 35, dependencies: ['counting'] },
-    { id: 'addition', label: 'Addition', mastery: 0, unlocked: false, x: 30, y: 60, dependencies: ['numbers'] },
-    { id: 'subtraction', label: 'Subtract', mastery: 0, unlocked: false, x: 70, y: 60, dependencies: ['numbers'] },
-    { id: 'shapes', label: 'Shapes', mastery: 0, unlocked: false, x: 50, y: 80, dependencies: ['addition', 'subtraction'] },
+    { id: 'counting', label: 'Counting', mastery: 0, unlocked: true, x: 30, y: 20, dependencies: [] },
+    { id: 'addition', label: 'Addition', mastery: 0, unlocked: false, x: 50, y: 50, dependencies: ['counting'] },
+    { id: 'subtraction', label: 'Subtraction', mastery: 0, unlocked: false, x: 70, y: 80, dependencies: ['addition'] },
   ]);
-  
-  // Video State
+
   const [videoRecommendations] = useState<VideoRecommendation[]>([
-    {
-      id: '1',
-      title: 'Learn to Count 1-10 | Fun Animation',
-      thumbnail: 'https://images.unsplash.com/photo-1503676260728-1c00da094a0b?w=400',
-      videoId: 'dQw4w9WgXcQ',
-      topic: 'Counting',
-    },
-    {
-      id: '2',
-      title: 'Addition for Kids | Animated Lesson',
-      thumbnail: 'https://images.unsplash.com/photo-1509228468518-180dd4864904?w=400',
-      videoId: 'dQw4w9WgXcQ',
-      topic: 'Addition',
-    },
-    {
-      id: '3',
-      title: 'Subtraction Made Easy | Fun Learning',
-      thumbnail: 'https://images.unsplash.com/photo-1587825140708-dfaf72ae4b04?w=400',
-      videoId: 'dQw4w9WgXcQ',
-      topic: 'Subtraction',
-    },
-    {
-      id: '4',
-      title: 'Shapes & Colors | Educational Video',
-      thumbnail: 'https://images.unsplash.com/photo-1596496181848-3091d4878b24?w=400',
-      videoId: 'dQw4w9WgXcQ',
-      topic: 'Shapes',
-    },
-    {
-      id: '5',
-      title: 'Math Magic | Interactive Learning',
-      thumbnail: 'https://images.unsplash.com/photo-1632571401005-458e9d244591?w=400',
-      videoId: 'dQw4w9WgXcQ',
-      topic: 'Math',
-    },
-    {
-      id: '6',
-      title: 'Geometry Basics | Animated Tutorial',
-      thumbnail: 'https://images.unsplash.com/photo-1604079628040-94301bb21b91?w=400',
-      videoId: 'dQw4w9WgXcQ',
-      topic: 'Geometry',
-    },
+    { id: '1', title: 'Learn to Count 1-10', thumbnail: 'https://images.unsplash.com/photo-1503676260728-1c00da094a0b?w=400', videoId: 'dQw4w9WgXcQ', topic: 'Counting' },
+    { id: '2', title: 'Addition for Kids', thumbnail: 'https://images.unsplash.com/photo-1509228468518-180dd4864904?w=400', videoId: 'dQw4w9WgXcQ', topic: 'Addition' },
   ]);
-  
+
   const unlockedVideos = Math.min(level, videoRecommendations.length);
-  
-  // Handle shape detection
-  const handleShapeDetected = (shape: string, isCorrect: boolean) => {
+
+  const generateNewQuestion = useCallback(() => {
+    if (mode === 'count') {
+      const { question, answer } = mathQuestions[Math.floor(Math.random() * mathQuestions.length)];
+      setTargetNumber(answer);
+      setCurrentPrompt(question);
+    } else {
+      setCurrentPrompt('Draw a Circle!');
+    }
+  }, [mode]);
+
+  const handleAnswer = (isCorrect: boolean) => {
     if (isCorrect) {
-      // Play success sound
       if (soundEnabled) playSound('success');
-      
       const newScore = score + 10;
       setScore(newScore);
-      
-      const newMastery = Math.min(masteryProgress + 10, 100);
-      const oldMastery = masteryProgress;
-      setMasteryProgress(newMastery);
-      
-      // Play coin sound for score increase
-      if (soundEnabled) {
-        setTimeout(() => playSound('coin'), 200);
+      setMasteryProgress(prev => Math.min(prev + 10, 100));
+
+      if (isPracticing && practicingNodeId) {
+          const newPracticeProgress = practiceProgress + 1;
+          setPracticeProgress(newPracticeProgress);
+          setCharacterMessage(`You! got it crct! ${PRACTICE_THRESHOLD - newPracticeProgress} more to go!`);
+
+          if (newPracticeProgress >= PRACTICE_THRESHOLD) {
+              updateKnowledgeGraph(practicingNodeId, 100);
+              setCharacterMessage('You! got it crct!');
+              setIsPracticing(false);
+              setPracticingNodeId(null);
+              setPracticeProgress(0);
+          }
+      } else {
+        setCharacterMessage('You! got it crct!');
       }
-      
-      // Play level-up sound if mastery threshold crossed
-      if (oldMastery < 50 && newMastery >= 50 && soundEnabled) {
-        setTimeout(() => playSound('levelUp'), 400);
-      }
-      
-      setCharacterMood('happy');
-      setCharacterMessage('Great job! That\'s correct!');
-      
-      // Check for level up
+
       if (newScore >= (level + 1) * 100) {
         levelUp();
       }
       
-      // Update knowledge graph
-      updateKnowledgeGraph('counting', 10);
+      setTimeout(() => generateNewQuestion(), 2000);
     } else {
-      // Play fail sound
       if (soundEnabled) playSound('fail');
-      
       const newScore = Math.max(score - 5, 0);
       setScore(newScore);
       setCharacterMood('encouraging');
       setCharacterMessage('Keep trying! You can do it!');
+      if(isPracticing) {
+          setPracticeProgress(0);
+      }
     }
   };
   
-  // Level up logic
+  const handleShapeDetected = (shape: string, isCorrect: boolean) => {
+    if (isCorrect) {
+        if (soundEnabled) playSound('success');
+        setScore(prev => prev + 10);
+        setMasteryProgress(prev => Math.min(prev + 10, 100));
+        setCharacterMessage('Awesome circle!');
+    } else {
+        if (soundEnabled) playSound('fail');
+        setCharacterMessage('That doesn\'t look like a circle. Try again!');
+    }
+    setTimeout(() => generateNewQuestion(), 2000);
+  }
+
   const levelUp = () => {
-    // Play level up sound
     if (soundEnabled) playSound('levelUp');
-    
     const newLevel = level + 1;
     setLevel(newLevel);
     setShowLevelUp(true);
     setCharacterMood('excited');
     setCharacterMessage('LEVEL UP! Amazing work!');
-    
     setTimeout(() => setShowLevelUp(false), 3000);
-    
-    // Unlock next course level
-    setCourseLevels(prev => prev.map((lvl, idx) => {
-      if (lvl.id === newLevel - 1) {
-        return { ...lvl, completed: true, current: false };
-      }
-      if (lvl.id === newLevel) {
-        return { ...lvl, locked: false, current: true };
-      }
-      return lvl;
-    }));
-    
-    // Unlock knowledge nodes
-    if (newLevel === 2) unlockNode('addition');
-    if (newLevel === 3) unlockNode('subtraction');
-    if (newLevel === 4) unlockNode('shapes');
   };
-  
-  // Update knowledge graph
+
   const updateKnowledgeGraph = (nodeId: string, increment: number) => {
-    setKnowledgeNodes(prev => prev.map(node => 
-      node.id === nodeId 
-        ? { ...node, mastery: Math.min(node.mastery + increment, 100) }
-        : node
-    ));
+    setKnowledgeNodes(prev => {
+        const newNodes = prev.map(node =>
+            node.id === nodeId
+                ? { ...node, mastery: Math.min(node.mastery + increment, 100) }
+                : node
+        );
+
+        const masteredNode = newNodes.find(n => n.id === nodeId);
+        if (masteredNode && masteredNode.mastery >= 100) {
+            return newNodes.map(n => {
+                const dependenciesMet = n.dependencies.every(depId => {
+                    const depNode = newNodes.find(d => d.id === depId);
+                    return depNode && depNode.mastery >= 100;
+                });
+                if (dependenciesMet && !n.unlocked) {
+                    setPracticingNodeId(n.id);
+                    return { ...n, unlocked: true };
+                }
+                return n;
+            });
+        }
+        return newNodes;
+    });
   };
-  
-  const unlockNode = (nodeId: string) => {
-    setKnowledgeNodes(prev => prev.map(node => 
-      node.id === nodeId 
-        ? { ...node, unlocked: true }
-        : node
-    ));
-  };
-  
-  // Handle level selection
-  const handleLevelSelect = (levelId: number) => {
-    const selectedLevel = courseLevels.find(l => l.id === levelId);
-    if (selectedLevel && !selectedLevel.locked) {
-      setCourseLevels(prev => prev.map(l => ({
-        ...l,
-        current: l.id === levelId
-      })));
+
+  const handleNodeClick = (node: KnowledgeNode) => {
+      if(!node.unlocked) {
+          setCharacterMessage("You need to unlock this skill first!");
+          return;
+      }
+      if(node.mastery >= 100) {
+          setCharacterMessage("You have already mastered this skill!");
+          return;
+      }
       
-      // Update prompt based on level
-      const prompts = [
-        'Draw a Circle!',
-        'Draw a Square!',
-        'Draw a Triangle!',
-        'Draw any Shape!',
-      ];
-      setCurrentPrompt(prompts[levelId - 1] || 'Draw a Circle!');
-    }
-  };
+      setIsPracticing(true);
+      setPracticingNodeId(node.id);
+      setPracticeProgress(0);
+      setCharacterMessage(`Let's practice ${node.label}!`);
+      setMode('count');
+      generateNewQuestion();
+  }
   
-  const currentLevel = courseLevels.find(l => l.current);
-  
+  useEffect(() => {
+    generateNewQuestion();
+  }, [mode, generateNewQuestion]);
+
   return (
     <div 
       className="min-h-screen bg-gradient-to-br from-purple-200 via-pink-200 to-blue-200 p-4 overflow-x-hidden"
       style={{ fontFamily: "'Quicksand', sans-serif" }}
     >
-      {/* Camera Permission Banner */}
-      {window.self !== window.top && (
-        <motion.div
-          initial={{ y: -100, opacity: 0 }}
-          animate={{ y: 0, opacity: 1 }}
-          className="mb-4"
-        >
-          <div className="max-w-7xl mx-auto">
-            <div className="bg-yellow-400 border-4 border-yellow-600 rounded-lg p-4 shadow-lg">
-              <div className="flex items-center justify-between gap-4">
-                <div className="flex items-center gap-3">
-                  <span className="text-3xl">📷</span>
-                  <div>
-                    <p 
-                      className="text-sm text-yellow-900 font-bold mb-1"
-                      style={{ fontFamily: "'Press Start 2P', cursive" }}
-                    >
-                      CAMERA BLOCKED!
-                    </p>
-                    <p className="text-xs text-yellow-800">
-                      Running inside iframe. Open localhost:8501 to use camera features.
-                    </p>
-                  </div>
-                </div>
-                <button
-                  onClick={() => window.open('http://localhost:8501/', '_blank')}
-                  className="px-4 py-2 bg-yellow-600 hover:bg-yellow-700 text-white rounded-lg border-4 border-yellow-800 transition-colors text-xs font-bold"
-                  style={{ fontFamily: "'Press Start 2P', cursive" }}
-                >
-                  OPEN APP
-                </button>
-              </div>
-            </div>
-          </div>
-        </motion.div>
-      )}
-      
-      {/* Header */}
       <motion.header 
         initial={{ y: -100 }}
         animate={{ y: 0 }}
@@ -342,10 +295,8 @@ export default function App() {
         </div>
       </motion.header>
       
-      {/* Main Content */}
       <div className="max-w-7xl mx-auto">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* Left Panel - Mastery & Course */}
           <motion.div 
             initial={{ x: -100, opacity: 0 }}
             animate={{ x: 0, opacity: 1 }}
@@ -353,20 +304,23 @@ export default function App() {
             className="lg:col-span-3 space-y-6"
           >
             <MasteryPanel
-              score={score}
-              level={level}
-              currentTopic={currentLevel?.topic || 'Getting Started'}
-              masteryProgress={masteryProgress}
-              lastCompletedLevel={lastCompletedLevel}
+                score={score}
+                level={level}
+                currentTopic={practicingNodeId || 'Free Play'}
+                masteryProgress={masteryProgress}
             />
-            
-            <CoursePanel
-              levels={courseLevels}
-              onLevelSelect={handleLevelSelect}
-            />
+             <div className="flex justify-around">
+                <RetroButton onClick={() => setMode('count')} variant={mode === 'count' ? 'primary' : 'default'}>
+                    <Hand className="w-5 h-5 mr-2"/>
+                    Count
+                </RetroButton>
+                <RetroButton onClick={() => setMode('draw')} variant={mode === 'draw' ? 'primary' : 'default'}>
+                    <Brush className="w-5 h-5 mr-2"/>
+                    Draw
+                </RetroButton>
+            </div>
           </motion.div>
           
-          {/* Center Panel - Drawing Canvas */}
           <motion.div 
             initial={{ y: 100, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
@@ -375,23 +329,24 @@ export default function App() {
           >
             <DrawingCanvas
               currentPrompt={currentPrompt}
+              onAnswer={handleAnswer}
               onShapeDetected={handleShapeDetected}
               isActive={true}
+              targetNumber={targetNumber}
+              mode={mode}
             />
           </motion.div>
           
-          {/* Right Panel - Knowledge Graph */}
           <motion.div 
             initial={{ x: 100, opacity: 0 }}
             animate={{ x: 0, opacity: 1 }}
             transition={{ delay: 0.2 }}
             className="lg:col-span-3"
           >
-            <KnowledgeGraph nodes={knowledgeNodes} />
+            <KnowledgeGraph nodes={knowledgeNodes} onNodeClick={handleNodeClick} practicingNodeId={practicingNodeId || undefined} />
           </motion.div>
         </div>
         
-        {/* Bottom Section - Videos */}
         <motion.div 
           initial={{ y: 100, opacity: 0 }}
           animate={{ y: 0, opacity: 1 }}
@@ -405,14 +360,12 @@ export default function App() {
         </motion.div>
       </div>
       
-      {/* Pixel Character */}
       <PixelCharacter
         mood={characterMood}
         message={characterMessage}
         position="bottom-right"
       />
       
-      {/* Level Up Animation */}
       <AnimatePresence>
         {showLevelUp && (
           <motion.div

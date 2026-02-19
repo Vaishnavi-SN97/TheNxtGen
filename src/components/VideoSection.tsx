@@ -1,6 +1,7 @@
 import React, { useRef, useState, useCallback } from 'react';
 import { useHandDetection } from '../hooks/useHandDetection';
 import { useSounds } from '../hooks/useSounds';
+import { useGameStorage } from '../hooks/useGameStorage';
 import { RetroButton } from '../app/components/RetroButton';
 
 interface VideoSectionProps {
@@ -42,8 +43,17 @@ export const VideoSection: React.FC<VideoSectionProps> = ({ onScoreChange, onLev
   
   const { result, switchMode } = useHandDetection(videoRef, canvasRef);
   const { playSound } = useSounds();
+  const { progress, loaded, updateLevelScore, completeLevel } = useGameStorage();
   const detectionTimeRef = useRef<number>(Date.now());
   const lastDetectedRef = useRef<number | null>(null);
+
+  // Load saved scores on mount
+  React.useEffect(() => {
+    if (loaded) {
+      setScore(progress.levelScores.number);
+      setSubtractionScore(progress.levelScores.subtraction);
+    }
+  }, [loaded, progress.levelScores]);
 
   const startLevel = (newLevel: GameLevel) => {
     setLevel(newLevel);
@@ -66,6 +76,29 @@ export const VideoSection: React.FC<VideoSectionProps> = ({ onScoreChange, onLev
     }
     
     detectionTimeRef.current = Date.now();
+    lastDetectedRef.current = null;
+  };
+
+  const proceedToNextLevel = () => {
+    if (level === 'number') {
+      updateLevelScore('number', score);
+      completeLevel('number');
+      setTimeout(() => {
+        startLevel('count');
+      }, 500);
+    } else if (level === 'count') {
+      updateLevelScore('count', score);
+      completeLevel('count');
+      setTimeout(() => {
+        startLevel('subtraction');
+      }, 500);
+    } else if (level === 'subtraction') {
+      updateLevelScore('subtraction', subtractionScore);
+      completeLevel('subtraction');
+      setTimeout(() => {
+        startLevel('menu');
+      }, 500);
+    }
   };
 
   const generateSubtractionProblem = () => {
@@ -106,7 +139,7 @@ export const VideoSection: React.FC<VideoSectionProps> = ({ onScoreChange, onLev
             const accuracy = ((newCorrect / newAttempts) * 100).toFixed(1);
             if (onLevelComplete) onLevelComplete('number');
             alert(`🎉 Level 1 Complete!\nFinal Score: ${newScore}/10\nAccuracy: ${accuracy}%`);
-            setLevel('menu');
+            proceedToNextLevel();
           }, 1500);
         }
       }
@@ -115,7 +148,7 @@ export const VideoSection: React.FC<VideoSectionProps> = ({ onScoreChange, onLev
 
   // **LEVEL 2: Counting (Fingers)**
   React.useEffect(() => {
-    if (level === 'count' && result.fingerCount === 3 && result.status === 'Correct') {
+    if (level === 'count' && result.fingerCount === 3) {
       if (lastDetectedRef.current === 3) return;
       lastDetectedRef.current = 3;
 
@@ -148,6 +181,37 @@ export const VideoSection: React.FC<VideoSectionProps> = ({ onScoreChange, onLev
         const accuracy = ((newCorrect / newAttempts) * 100).toFixed(1);
         playSound('level_complete');
         setTimeout(() => {
+          alert(`✅ Level 2 Complete!\nScore: ${newScore}\nAccuracy: ${accuracy}%`);
+          if (onLevelComplete) onLevelComplete('count');
+          proceedToNextLevel();
+        }, 500);
+      } else {
+        setTimeout(() => {
+          lastDetectedRef.current = null;
+        }, 1200);
+      }
+      
+      return () => clearTimeout(feedbackTimer);
+    }
+  }, [result.fingerCount, level, score, attempts, correctAttempts, onScoreChange, playSound]);
+      
+      setScore(newScore);
+      setAttempts(newAttempts);
+      setCorrectAttempts(newCorrect);
+      
+      if (onScoreChange) {
+        onScoreChange(newScore);
+      }
+
+      // Hide feedback after 1 second
+      const feedbackTimer = setTimeout(() => {
+        setShowCorrectFeedback(false);
+      }, 1000);
+
+      if (newScore >= 5) {
+        const accuracy = ((newCorrect / newAttempts) * 100).toFixed(1);
+        playSound('level_complete');
+        setTimeout(() => {
           if (onLevelComplete) onLevelComplete('count');
           alert(`✅ Level 2 Complete!\nScore: ${newScore}\nAccuracy: ${accuracy}%`);
           setLevel('menu');
@@ -162,37 +226,71 @@ export const VideoSection: React.FC<VideoSectionProps> = ({ onScoreChange, onLev
     }
   }, [result.fingerCount, result.status, level, score, attempts, correctAttempts, onScoreChange, playSound]);
 
-  // **LEVEL 3: Subtraction**
+  // **LEVEL 3: Subtraction (Accept both FINGERS and DRAWN numbers)**
   React.useEffect(() => {
-    if (level === 'subtraction' && result.detectedNumber !== null && result.status.includes('Detected')) {
-      const expectedAnswer = num1 - num2;
-      
-      if (lastDetectedRef.current === result.detectedNumber) return;
-      lastDetectedRef.current = result.detectedNumber;
+    if (level !== 'subtraction') return;
+    
+    const expectedAnswer = num1 - num2;
+    let detectedAnswer: number | null = null;
+    let detectionMethod = '';
 
-      const newAttempts = attempts + 1;
-      setAttempts(newAttempts);
-
-      if (result.detectedNumber === expectedAnswer) {
-        const newScore = subtractionScore + 1;
-        const newCorrect = correctAttempts + 1;
-        setSubtractionScore(newScore);
-        setCorrectAttempts(newCorrect);
-
-        if (newScore >= 5) {
-          const accuracy = ((newCorrect / newAttempts) * 100).toFixed(1);
-          if (onLevelComplete) onLevelComplete('subtraction');
-          alert(`🏆 Level 3 Complete!\nScore: ${newScore}\nAccuracy: ${accuracy}%`);
-          setLevel('menu');
-        } else {
-          setTimeout(() => {
-            generateSubtractionProblem();
-            lastDetectedRef.current = null;
-          }, 1200);
-        }
-      }
+    // Method 1: Check drawn number
+    if (result.detectedNumber !== null && result.status.includes('Detected')) {
+      detectedAnswer = result.detectedNumber;
+      detectionMethod = 'drawn';
     }
-  }, [result.detectedNumber, result.status, level, num1, num2, attempts, correctAttempts, subtractionScore]);
+    // Method 2: Check finger count
+    else if (result.fingerCount > 0 && result.status === 'Correct' && result.fingerCount !== 3) {
+      detectedAnswer = result.fingerCount;
+      detectionMethod = 'fingers';
+    }
+
+    if (detectedAnswer === null) return;
+
+    if (lastDetectedRef.current === detectedAnswer) return;
+    lastDetectedRef.current = detectedAnswer;
+
+    const newAttempts = attempts + 1;
+    setAttempts(newAttempts);
+
+    if (detectedAnswer === expectedAnswer) {
+      playSound('correct');
+      setFeedbackMessage(`✅ CORRECT! (${detectionMethod})`);
+      setFeedbackType('correct');
+      setShowCorrectFeedback(true);
+
+      const newScore = subtractionScore + 1;
+      const newCorrect = correctAttempts + 1;
+      setSubtractionScore(newScore);
+      setCorrectAttempts(newCorrect);
+
+      setTimeout(() => setShowCorrectFeedback(false), 1500);
+
+      if (newScore >= 5) {
+        const accuracy = ((newCorrect / newAttempts) * 100).toFixed(1);
+        playSound('level_complete');
+        setTimeout(() => {
+          alert(`🏆 Level 3 Complete!\nScore: ${newScore}\nAccuracy: ${accuracy}%`);
+          if (onLevelComplete) onLevelComplete('subtraction');
+          proceedToNextLevel();
+        }, 500);
+      } else {
+        setTimeout(() => {
+          generateSubtractionProblem();
+          lastDetectedRef.current = null;
+        }, 1500);
+      }
+    } else {
+      playSound('incorrect');
+      setFeedbackMessage(`❌ Wrong! Answer is ${expectedAnswer}`);
+      setFeedbackType('incorrect');
+      setShowCorrectFeedback(true);
+      setTimeout(() => setShowCorrectFeedback(false), 1500);
+      setTimeout(() => {
+        lastDetectedRef.current = null;
+      }, 1500);
+    }
+  }, [result.detectedNumber, result.fingerCount, result.status, level, num1, num2, attempts, correctAttempts, subtractionScore, playSound]);
 
   return (
     <div className="w-full bg-black rounded-lg overflow-hidden">
